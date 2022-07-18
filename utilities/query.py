@@ -13,6 +13,8 @@ from urllib.parse import urljoin
 import pandas as pd
 from opensearchpy import OpenSearch
 import fasttext
+from sentence_transformers import SentenceTransformer
+
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -220,6 +222,42 @@ def create_query(
         query_obj["_source"] = source
     return query_obj
 
+# Vector Query method
+def create_vector_query(
+    user_query,
+    model,
+    size=10,
+    sort="_score",
+    sortDir="desc",
+    source=None,
+    
+):
+    user_query_vector = model.encode(user_query.lower()).tolist()
+    # print(user_query_vector)
+    # print(len(user_query_vector))
+    
+    query_obj = {   
+                    "size": size,
+                    "query": {
+                        "knn": {
+                        "embedding": {
+                            "vector": user_query_vector,
+                            "k": 3
+                        }
+                        }
+                    }
+                }
+   
+    if user_query == "*" or user_query == "#":
+        # replace the bool
+        try:
+            query_obj["query"] = {"match_all": {}}
+        except:
+            print("Couldn't replace query for *")
+    if source is not None:  # otherwise use the default and retrieve all source
+        query_obj["_source"] = source
+    return query_obj
+
 
 def search(
     client,
@@ -228,26 +266,31 @@ def search(
     sort="_score",
     sortDir="desc",
     use_synonyms: bool = False,
+    vector: bool = False,
 ):
     
     #### W3: classify the query
     model = fasttext.load_model("/workspace/datasets/fasttext/query_classifier.bin")
     query_category = model.predict(user_query)[0][0].split("__")[2]
 
-    print(query_category)
+    if vector:
+        model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        query_obj = create_vector_query(user_query,model,size=20,)
 
-    #### W3: create filters and boosts
-    # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(
-        user_query,
-        click_prior_query=None,
-        filters=None,
-        query_category=query_category,
-        sort=sort,
-        sortDir=sortDir,
-        source=["name", "shortDescription"],
-        use_synonyms=use_synonyms,
-    )
+    else:
+        #### W3: create filters and boosts
+        # Note: you may also want to modify the `create_query` method above
+        query_obj = create_query(
+            user_query,
+            click_prior_query=None,
+            filters=None,
+            query_category=query_category,
+            sort=sort,
+            sortDir=sortDir,
+            source=["name", "shortDescription"],
+            use_synonyms=use_synonyms,
+        )
+
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if (
@@ -292,6 +335,13 @@ if __name__ == "__main__":
             "If this is set, name.synonyms will replace name in search query"
         ),
     )
+    general.add_argument(
+        "--vector",
+        action="store_true",
+        help=(
+            "If this is set, search using vectors"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -325,6 +375,7 @@ if __name__ == "__main__":
     )
     index_name = args.index
     use_synonyms: bool = args.synonyms
+    vector: bool = args.vector
     query_prompt = "\nEnter your query (type 'Exit' to exit or hit ctrl-c):"
     while True:
         try:
@@ -340,6 +391,7 @@ if __name__ == "__main__":
                     user_query=query,
                     index=index_name,
                     use_synonyms=use_synonyms,
+                    vector=vector,
                 )
 
  
